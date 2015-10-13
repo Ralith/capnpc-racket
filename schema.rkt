@@ -4,36 +4,28 @@
 
 (provide (all-defined-out))
 
-(define-ref code-generator-request)
-(define-list code-generator-request-list)
-(define-ref node)
-(define-list node-list)
-(define-ref node-nested-node)
-(define-list node-nested-node-list)
-(define-ref annotation)
-(define-list annotation-list)
-(define-ref enumerant)
-(define-list enumerant-list)
-(define-ref field)
-(define-list field-list)
-(define-struct-list-ref field-list-ref field-list field 56)
-(define-ref type)
+(define-struct code-generator-request)
+(define-struct node)
+(define-struct node-nested-node)
+(define-struct annotation)
+(define-struct enumerant)
+(define-struct field)
+(define-struct-list-ref field-list-ref field 56)
+(define-struct type)
 
-(define-ref requested-file)
-(define-list requested-file-list)
-(define-ref import)
-(define-list import-list)
+(define-struct requested-file)
+(define-struct import)
 
-(define-list-accessor cgr-nodes code-generator-request node-list 0)
+(define-list-accessor cgr-nodes code-generator-request node 0)
 
-(define-struct-list-ref nodes-ref node-list node 80)
+(define-struct-list-ref nodes-ref node 80)
 
 (define-int-accessor node-id node 3 #f 0)
 (define-text-accessor node-name node 5)
 (define-int-accessor node-name-prefix-length node 2 #f 2)
 (define-int-accessor node-scope-id node 3 #f 2)
-(define-list-accessor node-nested-nodes node node-nested-node-list 6)
-(define-list-accessor node-annotations node annotation-list 7)
+(define-list-accessor node-nested-nodes node node-nested-node 6)
+(define-list-accessor node-annotations node annotation 7)
 
 (define-tag Node-Case node-case
   file struct enum interface const annotation)
@@ -43,13 +35,13 @@
 (define-int-accessor node-struct-pointer-count node 1 #f 12)
 (define-bool-accessor node-struct-is-group node 224)
 (define-int-accessor node-struct-discriminant-offset node 2 #f 8)
-(define-list-accessor node-struct-fields node field-list 8)
+(define-list-accessor node-struct-fields node field 8)
 
 (define-tag ElementSize element-size
   empty bit byte two-bytes four-bytes eight-bytes pointer inline-composite)
 
-(define-list-accessor node-enum-enumerants node enumerant-list 8)
-(define-struct-list-ref enumerant-list-ref enumerant-list enumerant 24)
+(define-list-accessor node-enum-enumerants node enumerant 8)
+(define-struct-list-ref enumerant-list-ref enumerant 24)
 
 (define-text-accessor field-name field 3)
 (define-tag Field-Case field-case
@@ -74,17 +66,17 @@
 
 (define-text-accessor enumerant-name enumerant 1)
 (define-int-accessor enumerant-code-order enumerant 1 #f 0)
-(define-list-accessor enumerant-annotations enumerant annotation-list 2)
+(define-list-accessor enumerant-annotations enumerant annotation 2)
 
-(define-list-accessor cgr-requested-files code-generator-request requested-file-list 1)
+(define-list-accessor cgr-requested-files code-generator-request requested-file 1)
 
-(define-struct-list-ref rfl-ref requested-file-list requested-file 24)
+(define-struct-list-ref rfl-ref requested-file 24)
 
 (define-int-accessor requested-file-id requested-file 3 #f 0)
 (define-text-accessor requested-file-name requested-file 1)
-(define-list-accessor requested-file-imports requested-file import-list 2)
+(define-list-accessor requested-file-imports requested-file import 2)
 
-(define-struct-list-ref imports-ref import-list import 16)
+(define-struct-list-ref imports-ref import 16)
 
 (define-int-accessor import-id import 3 #f 0)
 (define-text-accessor import-name import 1)

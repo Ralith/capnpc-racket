@@ -3,11 +3,17 @@
 (require "primitives.rkt"
          (for-syntax racket/syntax))
 
-(provide (all-defined-out))
+(provide (except-out (all-defined-out) List-length))
 
 (struct reference ((message : Message) (location : location)))
 
-(struct list-reference reference ((length : Natural)))
+(struct struct-reference reference ())
+
+(define-type element-type (U Nonnegative-Fixnum 'bit 'pointer))
+
+(struct (a) List reference ((length : Natural)))
+
+(define list-length List-length)
 
 (: make-list-accessor (-> Natural (-> reference (Values location Natural))))
 (define (make-list-accessor offset)
@@ -87,7 +93,7 @@
     (let ((access (make-list-accessor offset)))
      (lambda ((ref : arg))
        (let-values (((loc length) (access ref)))
-         (ret (reference-message ref) loc length))))))
+         (cast (List (reference-message ref) loc length) (List ret)))))))
 
 (define-syntax-rule (define-blob-accessor name arg offset)
   (define name (lambda ((x : arg)) (make-blob-accessor offset) x)))
@@ -102,15 +108,8 @@
      (lambda ((ref : arg) (index : Natural))
        (access ref index)))))
 
-(define-syntax-rule (define-struct-list-ref name arg ret size)
-  (define-list-ref name arg (lambda ((r : reference)) (ret (reference-message r) (reference-location r))) size))
-
-(define-syntax-rule (define-list-list-ref name arg ret)
-  (define-list-ref name arg
-    (lambda ((r : reference))
-      (let* ((msg (reference-message r))
-             (ptr (decode-list-pointer msg (reference-location r))))
-        (ret msg (list-pointer-location ptr) (list-pointer-length ptr))))))
+(define-syntax-rule (define-struct-list-ref name ret size)
+  (define-list-ref name (List ret) (lambda ((r : reference)) (ret (reference-message r) (reference-location r))) size))
 
 (define-syntax (define-enum-accessor stx)
   (syntax-case stx ()
@@ -123,11 +122,8 @@
 (define-syntax-rule (define-union-which name arg offset case ...)
   (define-enum-accessor name arg offset case ...))
 
-(define-syntax-rule (define-ref name)
-  (struct name reference ()))
-
-(define-syntax-rule (define-list name)
-  (struct name list-reference ()))
+(define-syntax-rule (define-struct name)
+  (struct name struct-reference ()))
 
 (define-syntax (define-tag stx)
   (syntax-case stx ()
