@@ -30,23 +30,36 @@
 
 (: node-type-fragment (-> node String))
 (define (node-type-fragment node)
-  (camel->hyphen (substring (node-name node) (node-name-prefix-length node))))
+  (let ((str (substring (node-name node) (node-name-prefix-length node))))
+    (string-set! str 0 (char-upcase (string-ref str 0)))
+    str))
 
 (: for-nodes (-> node-list (-> node Void) Void))
 (define (for-nodes nodes proc)
   (for ((i (list-reference-length nodes)))
     (proc (nodes-ref nodes i))))
 
-(struct node-info ((type-fragment : String) (scope : Word) (cases : (Option (Vectorof String))))
+(struct node-info ((type-fragment : String) (scope : Word) (cases : (Option (Listof String))) (group? : Boolean))
         #:transparent)
 
-(: node-type-name (-> (HashTable Word node-info) node-info String))
-(define (node-type-name table info)
+(define-type NodeTable (HashTable Word node-info))
+
+(: node-type-name (->* (NodeTable node-info) (Boolean) String))
+(define (node-type-name table info (skip-groups #t))
   (let ((fragment (node-info-type-fragment info))
         (parent (hash-ref table (node-info-scope info))))
-    (if (= 0 (node-info-scope parent))
-        fragment
-        (string-append (node-type-name table parent) "-" fragment))))
+    (cond
+     ((= 0 (node-info-scope parent)) fragment)
+     ((and skip-groups (node-info-group? info)) (node-type-name table parent))
+     (else (string-append (node-type-name table parent #t) "-" fragment)))))
+
+(: node-field-base-name (-> NodeTable node-info String))
+(define (node-field-base-name table info)
+  (let ((fragment (string-downcase (camel->hyphen (node-info-type-fragment info))))
+        (parent (hash-ref table (node-info-scope info))))
+    (cond
+     ((= 0 (node-info-scope parent)) fragment)
+     (else (string-append (node-field-base-name table parent) "-" fragment)))))
 
 ;;; exponent, sign
 (: int-types (HashTable Symbol (Pairof Byte Boolean)))
@@ -62,11 +75,21 @@
 
 (: type-name (-> (HashTable Word node-info) type String))
 (define (type-name table ty)
-  (case (type-which ty)
+  (case (type-case ty)
     ('enum (node-type-name table (hash-ref table (type-enum-type-id ty))))
     ('struct (node-type-name table (hash-ref table (type-struct-type-id ty))))
     ('interface (node-type-name table (hash-ref table (type-interface-type-id ty))))
-    (else (symbol->string (type-which ty)))))
+    (else (symbol->string (type-case ty)))))
+
+;;; Enums and unions
+(: generate-tag-support (-> Output-Port String String (Listof String) Void))
+(define (generate-tag-support out name small-name tags)
+  (fprintf out "(define-tag ~a ~a\n " name small-name)
+  (for ((tag tags))
+    (write-string " " out)
+    (write-string tag out))
+  (write-string ")\n" out)
+  (void))
 
 (: generate-code (-> node-list Output-Port Void))
 (define (generate-code nodes out)
@@ -76,65 +99,75 @@
      nodes
      (lambda (node)
        (let ((cases
-              (case (node-which node)
+              (case (node-case node)
                 ('enum
                  (let ((enumerants (node-enum-enumerants node)))
-                   (cast
-                    (for/vector ((i (list-reference-length enumerants)))
-                      (camel->hyphen (enumerant-name (enumerant-list-ref enumerants i))))
-                    (Vectorof String))))
+                   (for/list : (Listof String) ((i (list-reference-length enumerants)))
+                     (camel->hyphen (enumerant-name (enumerant-list-ref enumerants i))))))
                 (else #f))))
-        (hash-set! table (node-id node) (node-info (node-type-fragment node) (node-scope-id node) cases)))))
+         (hash-set! table (node-id node) (node-info (node-type-fragment node) (node-scope-id node) cases
+                                                    (and (eq? 'struct (node-case node))
+                                                         (node-struct-is-group node)))))))
     (for-nodes
      nodes
      (lambda (node)
-       (unless (eq? 'file (node-which node))
+       (unless (eq? 'file (node-case node))
         (let* ((name (node-type-name table (hash-ref table (node-id node))))
-               (small-name (string-downcase name)))
-          (case (node-which node)
+               (field-base-name (node-field-base-name table (hash-ref table (node-id node)))))
+          (case (node-case node)
             ('struct
                 (unless (node-struct-is-group node)
-                  (fprintf out "\n(define-ref ~a)\n(define-list ~a-list)\n(define-struct-list-ref ~a-list-ref ~a-list ~a ~a)\n"
-                           name name small-name name name
+                  (fprintf out "\n(define-ref ~a)\n(define-list ~a-List)\n(define-struct-list-ref ~a-list-ref ~a-List ~a ~a)\n"
+                           name name field-base-name name name
                            (* 8 (+ (node-struct-data-word-count node)
                                    (node-struct-pointer-count node)))))
               (let ((fields (node-struct-fields node))
-                    (arg-type (if (node-struct-is-group node)
-                                  (node-type-name table (hash-ref table (node-info-scope (hash-ref table (node-id node)))))
-                                  small-name)))
-                ;; TODO: union which
+                    (anon-union-cases : (Listof field) null))
                 (for ((i (list-reference-length fields)))
                   (let ((field (field-list-ref fields i)))
-                    (when (eq? 'slot (field-which field))
-                      (let* ((fname (string-append small-name "-" (camel->hyphen (field-name field))))
+                    (unless (= field-no-discriminant (field-discriminant-value field))
+                      (set! anon-union-cases (cons field anon-union-cases)))
+                    (when (eq? 'slot (field-case field))
+                      (let* ((fname (string-append field-base-name "-" (camel->hyphen (field-name field))))
                              (type (field-slot-type field))
-                             (class (type-which type))
+                             (class (type-case type))
                              (offset (field-slot-offset field)))
                         (case class
-                          ('list (fprintf out "(define-list-accessor ~a ~a ~a-list ~a)\n"
-                                          fname arg-type (type-name table (type-list-element-type type)) offset))
+                          ('list (fprintf out "(define-list-accessor ~a ~a ~a-List ~a)\n"
+                                          fname name (type-name table (type-list-element-type type)) offset))
                           ('struct (fprintf out "(define-struct-accessor ~a ~a ~a ~a)\n"
-                                            fname arg-type (node-type-name table (hash-ref table (type-struct-type-id type)))
+                                            fname name (node-type-name table (hash-ref table (type-struct-type-id type)))
                                             offset))
-                          ('text (fprintf out "(define-text-accessor ~a ~a ~a)\n" fname arg-type offset))
-                          ('data (fprintf out "(define-blob-accessor ~a ~a ~a)\n" fname arg-type offset))
-                          ('enum (fprintf out "(define-enum-accessor ~a ~a ~a" fname arg-type offset)
-                                 (for ((n (assert (node-info-cases (hash-ref table (type-enum-type-id type))) vector?)))
+                          ('text (fprintf out "(define-text-accessor ~a ~a ~a)\n" fname name offset))
+                          ('data (fprintf out "(define-blob-accessor ~a ~a ~a)\n" fname name offset))
+                          ('enum (fprintf out "(define-enum-accessor ~a ~a ~a\n " fname name offset)
+                                 (for ((n (assert (node-info-cases (hash-ref table (type-enum-type-id type))) list?)))
                                    (write-string " " out)
                                    (write-string n out))
                                  (write-string ")\n" out))
                           ('bool (fprintf out "(define-bool-accessor ~a ~a ~a)\n"
-                                          fname arg-type offset))
+                                          fname name offset))
                           (else (if (hash-has-key? int-types class)
                                     (let ((int-type (hash-ref int-types class)))
                                       (fprintf out "(define-int-accessor ~a ~a ~a ~a ~a)\n"
-                                               fname arg-type (car int-type) (cdr int-type) offset))
-                                    (fprintf out "; ~a ~a\n" class fname))))))))))
+                                               fname name (car int-type) (cdr int-type) offset))
+                                    (fprintf out "; ~a ~a\n" class fname))))))))
+                (unless (null? anon-union-cases)
+                  (let ((tag-type-name (string-append (node-type-name table (hash-ref table (node-id node)) #f) "-Case"))
+                        (accessor-name (string-append field-base-name "-case")))
+                    (generate-tag-support
+                     out tag-type-name accessor-name
+                     (map (compose camel->hyphen field-name)
+                          (sort anon-union-cases
+                                (lambda ((x : field) (y : field))
+                                  (< (field-discriminant-value x)
+                                     (field-discriminant-value y))))))
+                    (fprintf out "(define ~a (compose tag->~a (cast (make-int-accessor 1 #f ~a) (-> ~a Nonnegative-Fixnum))))\n"
+                             accessor-name accessor-name (node-struct-discriminant-offset node) name)))))
             ('enum
              (let ((enumerants (node-enum-enumerants node)))
-              (fprintf out "\n(define-type ~a (U" name)
-              (for ((i (list-reference-length enumerants)))
-                (write-string " '" out)
-                (write-string (camel->hyphen (enumerant-name (enumerant-list-ref enumerants i))) out))
-              (write-string ")\n" out))))))
+               (generate-tag-support
+                out name field-base-name
+                (for/list : (Listof String) ((i (list-reference-length enumerants)))
+                          (camel->hyphen (enumerant-name (enumerant-list-ref enumerants i))))))))))
        (void)))))

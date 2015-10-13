@@ -1,6 +1,7 @@
 #lang typed/racket
 
-(require "primitives.rkt")
+(require "primitives.rkt"
+         (for-syntax racket/syntax))
 
 (provide (all-defined-out))
 
@@ -27,7 +28,8 @@
 (: make-struct-accessor (-> Natural (-> reference location)))
 (define (make-struct-accessor offset)
   (lambda ((ref : reference))
-    (struct-pointer-location (decode-struct-pointer (reference-message ref) (location+ (reference-location ref) offset)))))
+    (struct-pointer-location (decode-struct-pointer (reference-message ref)
+                                                    (location+ (reference-location ref) offset)))))
 
 (: make-int-accessor (-> Byte Boolean Natural (-> reference Integer)))
 (define (make-int-accessor exponent signed offset)
@@ -35,7 +37,10 @@
     (lambda ((ref : reference))
       (let* ((loc (reference-location ref))
              (start (+ (* size offset) (* 8 (location-word loc)))))
-        (integer-bytes->integer (vector-ref (reference-message ref) (location-segment loc)) signed #f start (+ start size))))))
+        (integer-bytes->integer
+         (vector-ref (reference-message ref)
+                     (location-segment loc))
+         signed #f start (+ start size))))))
 
 (: make-bool-accessor (-> Natural (-> reference Boolean)))
 (define (make-bool-accessor bit)
@@ -62,8 +67,11 @@
 (define-syntax (define-int-accessor stx)
   (syntax-case stx ()
     ((_ name type exponent sign offset)
+     #'(define-int-accessor name type exponent sign offset 0))
+    ((_ name type exponent sign offset default)
      (with-syntax ((ret (if (syntax->datum #'sign) #'Integer #'Natural)))
-      #'(define name (cast (make-int-accessor exponent sign offset) (-> type ret)))))))
+       #'(define name (compose (lambda ((x : ret)) (bitwise-xor default x))
+                               (cast (make-int-accessor exponent sign offset) (-> type ret))))))))
 
 (define-syntax-rule (define-bool-accessor name type bit)
   (define name (cast (make-bool-accessor bit) (-> type Boolean))))
@@ -120,3 +128,27 @@
 
 (define-syntax-rule (define-list name)
   (struct name list-reference ()))
+
+(define-syntax (define-tag stx)
+  (syntax-case stx ()
+    ((_ type-name small-name symbols ...)
+     (with-syntax ((marshal (format-id stx "~a->tag" #'small-name #:source #'small-name))
+                   (unmarshal (format-id stx "tag->~a" #'small-name #:source #'small-name))
+                   (type-def
+                    (datum->syntax stx (cons 'U (map (lambda (x) (list 'quote x))
+                                                     (syntax->list #'(symbols ...))))
+                                   #'(symbols ...)))
+                   (mappings
+                    (datum->syntax stx (let ((syms (syntax->list #'(symbols ...))))
+                                         (for/hasheq ((sym syms)
+                                                      (i (length syms)))
+                                           (values (syntax->datum sym) i)))
+                                   #'(symbols ...))))
+      #'(begin
+          (define-type type-name type-def)
+          (: marshal (-> type-name Nonnegative-Fixnum))
+          (define (marshal x)
+            (hash-ref (cast mappings (HashTable type-name Nonnegative-Fixnum)) x))
+          (: unmarshal (-> Nonnegative-Fixnum type-name))
+          (define (unmarshal x)
+            (vector-ref (cast #(symbols ...) (Vectorof type-name)) x)))))))

@@ -35,26 +35,38 @@
 (define-list-accessor node-nested-nodes node node-nested-node-list 6)
 (define-list-accessor node-annotations node annotation-list 7)
 
-(define-union-which node-which node 6
+(define-tag Node-Case node-case
   file struct enum interface const annotation)
+(define node-case (compose tag->node-case (cast (make-int-accessor 1 #f 6) (-> node Nonnegative-Fixnum))))
 
 (define-int-accessor node-struct-data-word-count node 1 #f 7)
 (define-int-accessor node-struct-pointer-count node 1 #f 12)
 (define-bool-accessor node-struct-is-group node 224)
+(define-int-accessor node-struct-discriminant-offset node 2 #f 8)
 (define-list-accessor node-struct-fields node field-list 8)
+
+(define-tag ElementSize element-size
+  empty bit byte two-bytes four-bytes eight-bytes pointer inline-composite)
 
 (define-list-accessor node-enum-enumerants node enumerant-list 8)
 (define-struct-list-ref enumerant-list-ref enumerant-list enumerant 24)
 
 (define-text-accessor field-name field 3)
-(define-union-which field-which field 4
+(define-tag Field-Case field-case
   slot group)
+(define field-case (compose tag->field-case (cast (make-int-accessor 1 #f 4) (-> field Nonnegative-Fixnum))))
 (define-int-accessor field-slot-offset field 2 #f 1)
 (define-struct-accessor field-slot-type field type 5)
 
-(define-union-which type-which type 0
-  void bool int8 int16 int32 int64 uint8 uint16 uint32 uint64 float32 float64
-  text data list enum struct interface any-pointer)
+(define-int-accessor field-discriminant-value field 1 #f 1 65535)
+
+(: field-no-discriminant Natural)
+(define field-no-discriminant 65535)
+
+(define-tag Type-Case type-case
+  void bool int8 int16 int32 int64 uint8 uint16 uint32 uint64 float32 float64 text data list enum struct interface any-pointer)
+(define type-case (compose tag->type-case (cast (make-int-accessor 1 #f 0) (-> type Nonnegative-Fixnum))))
+
 (define-struct-accessor type-list-element-type type type 2)
 (define-int-accessor type-enum-type-id type 3 #f 1)
 (define-int-accessor type-struct-type-id type 3 #f 1)
