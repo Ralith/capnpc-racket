@@ -30,14 +30,14 @@
 
 (: node-type-fragment (-> node String))
 (define (node-type-fragment node)
-  (let ((str (substring (node-name node) (node-name-prefix-length node))))
+  (let ((str (substring (node-display-name node) (node-display-name-prefix-length node))))
     (string-set! str 0 (char-upcase (string-ref str 0)))
     str))
 
-(: for-nodes (-> (List node) (-> node Void) Void))
+(: for-nodes (-> (ListReference node) (-> node Void) Void))
 (define (for-nodes nodes proc)
   (for ((i (list-length nodes)))
-    (proc (nodes-ref nodes i))))
+    (proc (node-list-ref nodes i))))
 
 (struct node-info ((type-fragment : String) (scope : Word) (cases : (Option (Listof String))) (group? : Boolean))
         #:transparent)
@@ -91,7 +91,7 @@
   (write-string ")\n" out)
   (void))
 
-(: generate-code (-> (List node) Output-Port Void))
+(: generate-code (-> (ListReference node) Output-Port Void))
 (define (generate-code nodes out)
   (write-string header out)
   (let ((table : (HashTable Word node-info) (make-hash)))
@@ -117,10 +117,8 @@
           (case (node-case node)
             ('struct
                 (unless (node-struct-is-group node)
-                  (fprintf out "\n(define-struct ~a)\n(define-struct-list-ref ~a-list-ref ~a ~a)\n"
-                           name field-base-name name
-                           (* 8 (+ (node-struct-data-word-count node)
-                                   (node-struct-pointer-count node)))))
+                  (fprintf out "\n(define-struct ~a)\n(define-struct-list-ref ~a-list-ref ~a)\n"
+                           name field-base-name name))
               (let ((fields (node-struct-fields node))
                     (anon-union-cases : (Listof field) null))
                 (for ((i (list-length fields)))
@@ -147,6 +145,7 @@
                                  (write-string ")\n" out))
                           ('bool (fprintf out "(define-bool-accessor ~a ~a ~a)\n"
                                           fname name offset))
+                          ('void (void))
                           (else (if (hash-has-key? int-types class)
                                     (let ((int-type (hash-ref int-types class)))
                                       (fprintf out "(define-int-accessor ~a ~a ~a ~a ~a)\n"

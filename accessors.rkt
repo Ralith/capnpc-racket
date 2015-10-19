@@ -3,46 +3,130 @@
 (require "primitives.rkt"
          (for-syntax racket/syntax))
 
-(provide (except-out (all-defined-out) List-length))
+(provide (except-out (all-defined-out)
+                     ListReference-length
+                     ListReference-element-type
+                     ListReference-element-data-size
+                     ListReference-element-pointers))
 
+;;; A reference always addresses the data of an object, and carries necessary information from the object's pointer.
 (struct reference ((message : Message) (location : location)))
 
-(struct struct-reference reference ())
+(struct struct-reference reference ((data-size : Index)))
 
-(define-type element-type (U Nonnegative-Fixnum 'bit 'pointer))
+(define-type ElementType (U 'data 'bit 'pointer 'composite))
 
-(struct (a) List reference ((length : Natural)))
+(struct (a) ListReference reference ((length : Index) (element-type : ElementType) (element-data-size : Index) (element-pointers : Index)))
 
-(define list-length List-length)
+(define-syntax-rule (struct-cast x to)
+  (let ((x* x))
+   (to (reference-message x*) (reference-location x*) (struct-reference-data-size x*))))
 
-(: make-list-accessor (-> Natural (-> reference (Values location Natural))))
+(define list-length ListReference-length)
+
+(: struct-list-ref (-> (ListReference struct-reference) Index struct-reference))
+(define (struct-list-ref xs i)
+  (let ((msg (reference-message xs))
+        (loc (reference-location xs))
+        (data-size (ListReference-element-data-size xs)))
+    (case (ListReference-element-type xs)
+      ((composite)
+       (struct-reference msg (location+ loc (* i (* 8 (+ data-size (ListReference-element-pointers xs)))))
+                         data-size))
+      ((data)
+       (struct-reference msg (location+ loc (* i data-size)) 1))
+      ((pointer)
+       (assert data-size zero?)
+       (struct-reference msg (location+ loc (* i 8)) 0))
+      (else (raise-user-error 'struct-list-ref "not a reference to a struct list")))))
+
+(: list-list-ref (-> (ListReference (ListReference reference)) Index (ListReference reference)))
+(define (list-list-ref xs i)
+  (let ((msg (reference-message xs))
+        (loc (reference-location xs)))
+    (assert (eq? 'pointer (ListReference-element-type xs)))
+    (list-deref msg (location+ loc (* 8 i)))))
+
+(: int-list-ref (-> Natural Boolean (ListReference Integer) Index Integer))
+(define (int-list-ref size signed xs i)
+  (let* ((msg (reference-message xs))
+         (loc (reference-location xs))
+         (start (+ (location-byte loc) (* i size)))
+         (end (+ start size)))
+    (assert (eq? 'data (ListReference-element-type xs)))
+    (integer-bytes->integer (vector-ref msg (location-segment loc)) signed #f start end)))
+
+(: bool-list-ref (-> (ListReference Boolean) Index Boolean))
+(define (bool-list-ref xs i)
+  ((make-bool-accessor i) xs))
+
+;;; Takes (possibly far) pointer location. Returns a fully initialized ListReference
+(: list-deref (-> Message location (ListReference reference)))
+(define (list-deref msg loc)
+  (let-values (((target-loc tag) (traverse-far-pointer msg loc)))
+    (assert tag raw-list-pointer?)
+    (let ((outer-len (raw-list-pointer-length tag))
+          (type (raw-list-pointer-element-type tag)))
+      (case type
+        ((0) (ListReference msg target-loc outer-len 'data 0 0))
+        ((1) (ListReference msg target-loc outer-len 'bit 0 0))
+        ((2 3 4 5)
+         (ListReference msg target-loc outer-len 'data 1 0))
+        ((6) (ListReference msg target-loc outer-len 'pointer 0 1))
+        ((7) (let* ((tag (msg-ref msg target-loc))
+                    (inner-len (near-pointer-offset tag)))
+               (assert (raw-struct-pointer? tag))
+               (ListReference msg (location+ target-loc 8) inner-len 'composite
+                              (raw-struct-pointer-size-data tag)
+                              (raw-struct-pointer-size-pointer tag))))
+        (else (raise-user-error 'list-deref "illegal list pointer element type tag ~a" type))))))
+
+(: print-struct-ref (-> struct-reference Void))
+(define (print-struct-ref x)
+  (printf "loc: ~a data-size: ~a\n" (reference-location x) (struct-reference-data-size x)))
+
+(: print-list-ref (All (a) (-> (ListReference a) Void)))
+(define (print-list-ref x)
+  (printf "loc: ~a length: ~a\n" (reference-location x) (list-length x)))
+
+(: make-list-accessor (-> Index (-> struct-reference (ListReference reference))))
 (define (make-list-accessor offset)
-  (lambda ((ref : reference))
-    (let ((ptr (decode-list-pointer (reference-message ref) (location+ (reference-location ref) offset))))
-      (values (list-pointer-location ptr) (list-pointer-length ptr)))))
+  (lambda ((ref : struct-reference))
+    (list-deref (reference-message ref)
+                (location+ (reference-location ref)
+                           (* 8 (+ (struct-reference-data-size ref) offset))))))
 
-(: make-blob-accessor (->* (Natural) (Boolean) (-> reference Bytes)))
+(: make-blob-accessor (->* (Index) (Boolean) (-> struct-reference Bytes)))
 (define (make-blob-accessor offset (drop-last #f))
-  (lambda ((ref : reference))
-    (let-values (((loc length) ((make-list-accessor offset) ref)))
-      (decode-blob (reference-message ref) loc length drop-last))))
+  (let ((access (make-list-accessor offset)))
+    (lambda ((ref : struct-reference))
+      (let ((blob-ref (access ref)))
+        (decode-blob (reference-message ref)
+                     (reference-location blob-ref)
+                     (ListReference-length blob-ref)
+                     drop-last)))))
 
-(: make-text-accessor (-> Natural (-> reference String)))
+(: make-text-accessor (-> Index (-> struct-reference String)))
 (define (make-text-accessor offset)
   (compose bytes->string/utf-8 (make-blob-accessor offset #t)))
 
-(: make-struct-accessor (-> Natural (-> reference location)))
+(: make-struct-accessor (-> Index (-> struct-reference struct-reference)))
 (define (make-struct-accessor offset)
-  (lambda ((ref : reference))
-    (struct-pointer-location (decode-struct-pointer (reference-message ref)
-                                                    (location+ (reference-location ref) offset)))))
+  (lambda ((ref : struct-reference))
+    (let ((msg (reference-message ref)))
+     (let-values (((loc tag)
+                   (traverse-far-pointer msg
+                                         (location+ (reference-location ref)
+                                                    (* 8 (+ (struct-reference-data-size ref)
+                                                            offset))))))
+       (struct-reference msg loc (raw-struct-pointer-size-data tag))))))
 
-(: make-int-accessor (-> Byte Boolean Natural (-> reference Integer)))
+(: make-int-accessor (-> Byte Boolean Index (-> reference Integer)))
 (define (make-int-accessor exponent signed offset)
   (let ((size (expt 2 exponent)))
     (lambda ((ref : reference))
       (let* ((loc (reference-location ref))
-             (start (+ (* size offset) (* 8 (location-word loc)))))
+             (start (+ (* size offset) (location-byte loc))))
         (integer-bytes->integer
          (vector-ref (reference-message ref)
                      (location-segment loc))
@@ -56,15 +140,10 @@
       (let ((loc (reference-location ref)))
        (bitwise-bit-set? (bytes-ref (vector-ref (reference-message ref)
                                                 (location-segment loc))
-                                    (+ byte (* 8 (location-word loc))))
+                                    (+ byte (location-byte loc)))
                          byte-bit)))))
 
-(: make-list-ref (All (a) (-> (-> reference a) Natural (-> reference Natural a))))
-(define (make-list-ref transformer size)
-  (lambda ((ref : reference) (i : Natural))
-    (transformer (reference (reference-message ref) (location+ (reference-location ref) (* size i))))))
-
-(: make-enum-accessor (-> Natural (Vectorof Symbol) (-> reference Symbol)))
+(: make-enum-accessor (-> Index (Vectorof Symbol) (-> reference Symbol)))
 (define (make-enum-accessor offset cases)
   (let ((accessor (make-int-accessor 1 #f offset)))
    (lambda ((ref : reference))
@@ -85,31 +164,26 @@
 (define-syntax-rule (define-struct-accessor name arg ret offset)
   (define name
     (let ((access (make-struct-accessor offset)))
-     (lambda ((ref : arg))
-       (ret (reference-message ref) (access ref))))))
+      (lambda ((ref : arg))
+        (struct-cast (access ref) ret)))))
 
 (define-syntax-rule (define-list-accessor name arg ret offset)
   (define name
     (let ((access (make-list-accessor offset)))
      (lambda ((ref : arg))
-       (let-values (((loc length) (access ref)))
-         (cast (List (reference-message ref) loc length) (List ret)))))))
+       (cast (access ref) (ListReference ret))))))
 
 (define-syntax-rule (define-blob-accessor name arg offset)
-  (define name (lambda ((x : arg)) (make-blob-accessor offset) x)))
+  (define name (let ((access (make-blob-accessor offset)))
+                 (lambda ((x : arg)) (access x)))))
 
 (define-syntax-rule (define-text-accessor name arg offset)
-  (define name (lambda ((x : arg)) ((make-text-accessor offset) x))))
+  (define name (let ((access (make-text-accessor offset)))
+                 (lambda ((x : arg)) (access x)))))
 
-;;; FIXME: Read size from pointer so reading of extended messages works
-(define-syntax-rule (define-list-ref name arg transformer size)
-  (define name
-    (let ((access (make-list-ref transformer (cast (/ size 8) Nonnegative-Fixnum))))
-     (lambda ((ref : arg) (index : Natural))
-       (access ref index)))))
-
-(define-syntax-rule (define-struct-list-ref name ret size)
-  (define-list-ref name (List ret) (lambda ((r : reference)) (ret (reference-message r) (reference-location r))) size))
+(define-syntax-rule (define-struct-list-ref name elt)
+  (define (name (xs : (ListReference elt)) (i : Index))
+    (struct-cast (struct-list-ref xs i) elt)))
 
 (define-syntax (define-enum-accessor stx)
   (syntax-case stx ()
@@ -148,3 +222,8 @@
           (: unmarshal (-> Nonnegative-Fixnum type-name))
           (define (unmarshal x)
             (vector-ref (cast #(symbols ...) (Vectorof type-name)) x)))))))
+
+(: root-struct (-> Message struct-reference))
+(define (root-struct msg)
+  (let-values (((loc tag) (traverse-far-pointer msg (location 0 0))))
+    (struct-reference msg loc (raw-struct-pointer-size-data tag))))

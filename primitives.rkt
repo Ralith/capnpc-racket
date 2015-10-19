@@ -7,32 +7,62 @@
 (define-type Message (Vectorof Bytes))
 
 (define-type Word Natural)
+(define word? exact-nonnegative-integer?)
 
-(struct location ((segment : Natural) (word : Natural))
+(struct location ((segment : Natural) (byte : Natural))
         #:transparent)
 
 (: msg-ref (-> Message location Word))
 (define (msg-ref msg loc)
-  (let ((word (location-word loc)))
-    (cast (integer-bytes->integer (vector-ref msg (location-segment loc)) #f #f (* 8 word) (* 8 (+ 1 word)))
+  (let ((addr (location-byte loc)))
+    (assert (/ addr 8) integer?)
+    (cast (integer-bytes->integer (vector-ref msg (location-segment loc)) #f #f addr (+ 8 addr))
           Natural)))
 
 (: location+ (-> location Natural * location))
-(define (location+ l . words)
+(define (location+ l . bytes)
   (location (location-segment l)
-            (cast (apply + (location-word l) words) Natural)))
+            (cast (apply + (location-byte l) bytes) Natural)))
+
+(: pointer-tag (-> Word Byte))
+(define (pointer-tag n)
+  (cast (bitwise-bit-field n 0 2) Byte))
+
+(: near-pointer-offset (-> Word Index))
+(define (near-pointer-offset n)
+  (cast (bitwise-bit-field n 2 32) Index))
+
+(define struct-pointer-tag 0)
+(define list-pointer-tag 1)
+(define far-pointer-tag 2)
 
 (: raw-struct-pointer? (-> Word Boolean))
 (define (raw-struct-pointer? x)
-  (= 0 (bitwise-bit-field x 0 2)))
+  (= struct-pointer-tag (pointer-tag x)))
+
+(: raw-struct-pointer-size-data (-> Word Index))
+(define (raw-struct-pointer-size-data n)
+  (cast (bitwise-bit-field n 32 48) Index))
+
+(: raw-struct-pointer-size-pointer (-> Word Index))
+(define (raw-struct-pointer-size-pointer n)
+  (cast (bitwise-bit-field n 48 64) Index))
 
 (: raw-list-pointer? (-> Word Boolean))
 (define (raw-list-pointer? x)
-  (= 1 (bitwise-bit-field x 0 2)))
+  (= list-pointer-tag (pointer-tag x)))
+
+(: raw-list-pointer-element-type (-> Word Byte))
+(define (raw-list-pointer-element-type n)
+  (cast (bitwise-bit-field n 32 35) Byte))
+
+(: raw-list-pointer-length (-> Word Index))
+(define (raw-list-pointer-length n)
+  (cast (bitwise-bit-field n 35 64) Index))
 
 (: raw-far-pointer? (-> Word Boolean))
 (define (raw-far-pointer? x)
-  (= 2 (bitwise-bit-field x 0 2)))
+  (= far-pointer-tag (pointer-tag x)))
 
 (struct far-pointer ((indirect : Boolean) (location : location))
         #:transparent)
@@ -40,58 +70,49 @@
 (: decode-far-pointer (-> Word far-pointer))
 (define (decode-far-pointer n)
   (assert n raw-far-pointer?)
-  (far-pointer (bitwise-bit-set? n 2) (location (bitwise-bit-field n 32 64) (bitwise-bit-field n 3 32))))
+  (far-pointer (bitwise-bit-set? n 2) (location (bitwise-bit-field n 32 64) (* 8 (bitwise-bit-field n 3 32)))))
 
-(: near-pointer-offset (-> Word Word))
-(define (near-pointer-offset n)
-  (bitwise-bit-field n 2 32))
-
-(: traverse-far-pointer (All (a) (-> Message location (-> location Word a) a)))
-(define (traverse-far-pointer msg loc proc)
+(: traverse-far-pointer (-> Message location (Values location Word)))
+(define (traverse-far-pointer msg loc)
+  (unless (integer? (/ (location-byte loc) 8))
+    (error "wat0"))
   (let ((n (msg-ref msg loc)))
     (if (raw-far-pointer? n)
         (match-let (((far-pointer indirect landing) (decode-far-pointer n)))
           (if indirect
               (match-let (((far-pointer #f data-loc) (decode-far-pointer (msg-ref msg landing))))
-                (proc data-loc (msg-ref msg (location+ landing 1))))
+                (unless (integer? (/ (location-byte data-loc) 8))
+                  (error "wat"))
+                (values data-loc (msg-ref msg (location+ landing 8))))
               (let ((near-ptr (msg-ref msg landing)))
-                (proc (location+ landing 1 (near-pointer-offset near-ptr)) near-ptr))))
-        (proc (location+ loc 1 (near-pointer-offset n)) n))))
-
-(struct struct-pointer ((location : location) (size-data : Natural) (size-pointers : Natural))
-        #:transparent)
-
-(: decode-struct-pointer (-> Message location struct-pointer))
-(define (decode-struct-pointer msg start)
-  (traverse-far-pointer msg start
-                        (lambda ((loc : location) (n : Word))
-                          (assert n raw-struct-pointer?)
-                          (struct-pointer loc (bitwise-bit-field n 32 48) (bitwise-bit-field n 48 64)))))
+                (unless (integer? (/ (location-byte landing) 8))
+                  (error "wat2"))
+                (values (location+ landing 8 (* 8 (near-pointer-offset near-ptr))) near-ptr))))
+        (begin
+          (unless (integer? (/ (location-byte loc) 8))
+            (error "wat3"))
+          (values (location+ loc 8 (* 8 (near-pointer-offset n))) n)))))
 
 (struct list-pointer ((location : location) (element-type : Byte) (length : Natural))
         #:transparent)
 
-(: decode-list-pointer (-> Message location list-pointer))
-(define (decode-list-pointer msg start)
-  (traverse-far-pointer
-   msg start
-   (lambda ((loc : location) (n : Word))
-     (assert n raw-list-pointer?)
-     (let ((elt-ty (cast (bitwise-bit-field n 32 35) Byte)))
-       (if (= 7 elt-ty)
-           (let ((tag (msg-ref msg loc)))
-             (list-pointer (location+ loc 1) elt-ty (bitwise-bit-field tag 2 32)))
-           (list-pointer loc elt-ty (bitwise-bit-field n 35 64)))))))
+;; (: decode-list-pointer (-> Message location list-pointer))
+;; (define (decode-list-pointer msg start)
+;;   (traverse-far-pointer
+;;    msg start
+;;    (lambda ((loc : location) (n : Word))
+;;      (assert n raw-list-pointer?)
+;;      (list-pointer loc (raw-list-pointer-element-type n) (raw-list-pointer-length n)))))
 
 (: blob-ptr? (-> list-pointer Boolean))
 (define (blob-ptr? ptr)
   (= 2 (list-pointer-element-type ptr)))
 
 (: decode-blob (->* (Message location Natural) (Boolean) Bytes))
-(define (decode-blob msg loc len (drop-last #f))
-  (let ((off (* 8 (location-word loc))))
+(define (decode-blob msg loc len (null-terminated #f))
+  (let ((off (location-byte loc)))
     (subbytes (vector-ref msg (location-segment loc)) off (+ off len
-                                                             (if drop-last -1 0)))))
+                                                             (if null-terminated -1 0)))))
 
 (: read-bytes-exact (-> Natural Input-Port Bytes))
 (define (read-bytes-exact n port)
@@ -114,7 +135,3 @@
       (read-bytes-exact 4 port))
     (build-vector n (lambda ((i : Index))
                       (read-bytes-exact (* 8 (vector-ref sizes i)) port)))))
-
-(: root-struct-location (-> Message location))
-(define (root-struct-location msg)
-  (struct-pointer-location (decode-struct-pointer msg (location 0 0))))
