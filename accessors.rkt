@@ -136,6 +136,12 @@
                          (location-segment loc))
              signed #f start (+ start size)))))))
 
+(: make-tag-accessor (-> Index (-> reference Nonnegative-Fixnum)))
+(define (make-tag-accessor offset)
+  (let ((access (make-int-accessor 1 #f offset)))
+   (lambda ((ref : reference))
+     (assert (assert (access ref) fixnum?) positive?))))
+
 (: make-float32-accessor (-> Index (-> reference Single-Flonum)))
 (define (make-float32-accessor offset)
   (lambda ((ref : reference))
@@ -161,12 +167,6 @@
                                                 (location-segment loc))
                                     (+ byte (location-byte loc)))
                          byte-bit)))))
-
-(: make-enum-accessor (-> Index (Vectorof Symbol) (-> reference Symbol)))
-(define (make-enum-accessor offset cases)
-  (let ((accessor (make-int-accessor 1 #f offset)))
-   (lambda ((ref : reference))
-     (vector-ref cases (accessor ref)))))
 
 (define-syntax (define-int-accessor stx)
   (syntax-case stx ()
@@ -210,16 +210,8 @@
   (define (name (xs : (ListReference elt)) (i : Index))
     (struct-cast (struct-list-ref xs i) elt)))
 
-(define-syntax (define-enum-accessor stx)
-  (syntax-case stx ()
-    ((_ name arg offset case ...)
-     (with-syntax ((retty (datum->syntax stx (list* 'U (map (lambda (x) (list 'quote x))
-                                                            (syntax->list #'(case ...))))
-                                         #'(case ...))))
-       #'(define name (cast (make-enum-accessor offset #(case ...)) (-> arg retty)))))))
-
-(define-syntax-rule (define-union-which name arg offset case ...)
-  (define-enum-accessor name arg offset case ...))
+(define-syntax-rule (define-enum-accessor name arg offset marshal)
+  (define name (compose marshal (make-tag-accessor offset))))
 
 (define-syntax-rule (define-struct name)
   (struct name struct-reference ()))
