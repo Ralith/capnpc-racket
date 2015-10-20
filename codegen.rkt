@@ -114,8 +114,8 @@
   (case (value-case value)
     ((int8 int16 int32 int64 uint8 uint16 uint32 uint64)
      (= 0 (value-int value)))
-    ;; ((float32) (= 0 (value-float32 value)))
-    ;; ((float64) (= 0 (value-float64 value)))
+    ((float32) (= 0 (value-float32 value)))
+    ((float64) (= 0 (value-float64 value)))
     ((bool) (eq? #f (value-bool value)))
     ((void) #t)
     ((enum) (= 0 (value-enum value)))
@@ -179,6 +179,8 @@
                           ((bool) (fprintf out "(define-bool-accessor ~a ~a ~a)\n"
                                            fname name offset))
                           ((void) (void))
+                          ((float32) (fprintf out "(define-float32-accessor ~a ~a ~a)\n" fname name offset))
+                          ((float64) (fprintf out "(define-float64-accessor ~a ~a ~a)\n" fname name offset))
                           (else (if (hash-has-key? int-types class)
                                     (let ((int-type (hash-ref int-types class)))
                                       (fprintf out "(define-int-accessor ~a ~a ~a ~a ~a"

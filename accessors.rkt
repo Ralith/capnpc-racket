@@ -136,6 +136,21 @@
                          (location-segment loc))
              signed #f start (+ start size)))))))
 
+(: make-float32-accessor (-> Index (-> reference Single-Flonum)))
+(define (make-float32-accessor offset)
+  (lambda ((ref : reference))
+    (let* ((loc (reference-location ref))
+           (start (+ (location-byte loc) (* 4 offset))))
+      (assert (floating-point-bytes->real (vector-ref (reference-message ref) (location-segment loc)) #f start (+ start 4))
+              single-flonum?))))
+
+(: make-float64-accessor (-> Index (-> reference Flonum)))
+(define (make-float64-accessor offset)
+  (lambda ((ref : reference))
+    (let* ((loc (reference-location ref))
+           (start (+ (location-byte loc) (* 8 offset))))
+      (floating-point-bytes->real (vector-ref (reference-message ref) (location-segment loc)) #f start (+ start 8)))))
+
 (: make-bool-accessor (-> Natural (-> reference Boolean)))
 (define (make-bool-accessor bit)
   (let* ((byte (floor (/ bit 8)))
@@ -161,6 +176,12 @@
      (with-syntax ((ret (if (syntax->datum #'sign) #'Integer #'Natural)))
        #'(define name (compose (lambda ((x : ret)) (bitwise-xor default x))
                                (cast (make-int-accessor exponent sign offset) (-> type ret))))))))
+
+(define-syntax-rule (define-float32-accessor name type offset)
+  (define name (cast (make-float32-accessor offset) (-> type Single-Flonum))))
+
+(define-syntax-rule (define-float64-accessor name type offset)
+  (define name (cast (make-float64-accessor offset) (-> type Flonum))))
 
 (define-syntax-rule (define-bool-accessor name type bit)
   (define name (cast (make-bool-accessor bit) (-> type Boolean))))

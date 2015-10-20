@@ -82,8 +82,8 @@
 (define-int-accessor value-uint16 Value 1 #f 1)
 (define-int-accessor value-uint32 Value 2 #f 1)
 (define-int-accessor value-uint64 Value 3 #f 1)
-; float32 value-float32
-; float64 value-float64
+(define-float32-accessor value-float32 Value 1)
+(define-float64-accessor value-float64 Value 1)
 (define-text-accessor value-text Value 0)
 (define-blob-accessor value-data Value 0)
 ; any-pointer value-list
