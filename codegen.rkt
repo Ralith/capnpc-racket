@@ -39,7 +39,7 @@
   (for ((i (list-length nodes)))
     (proc (node-list-ref nodes i))))
 
-(struct node-info ((type-fragment : String) (scope : Word) (cases : (Option (Listof String))) (group? : Boolean))
+(struct node-info ((type-fragment : String) (scope : Word) (group? : Boolean))
         #:transparent)
 
 (define-type NodeTable (HashTable Word node-info))
@@ -131,16 +131,9 @@
     (for-nodes
      nodes
      (lambda (node)
-       (let ((cases
-              (case (node-case node)
-                ((enum)
-                 (let ((enumerants (node-enum-enumerants node)))
-                   (for/list : (Listof String) ((i (list-length enumerants)))
-                     (camel->hyphen (enumerant-name (enumerant-list-ref enumerants i))))))
-                (else #f))))
-         (hash-set! table (node-id node) (node-info (node-type-fragment node) (node-scope-id node) cases
-                                                    (and (eq? 'struct (node-case node))
-                                                         (node-struct-is-group node)))))))
+       (hash-set! table (node-id node) (node-info (node-type-fragment node) (node-scope-id node)
+                                                  (and (eq? 'struct (node-case node))
+                                                       (node-struct-is-group node))))))
     ;; Define types
     (for-nodes
      nodes
