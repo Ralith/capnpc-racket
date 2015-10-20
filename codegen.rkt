@@ -64,14 +64,14 @@
 ;;; exponent, sign
 (: int-types (HashTable Symbol (Pairof Byte Boolean)))
 (define int-types
-  #hash((int8   . (0 . #t))
-        (int16  . (1 . #t))
-        (int32  . (2 . #t))
-        (int64  . (3 . #t))
-        (uint8  . (0 . #f))
-        (uint16 . (1 . #f))
-        (uint32 . (2 . #f))
-        (uint64 . (3 . #f))))
+  #hasheq((int8   . (0 . #t))
+          (int16  . (1 . #t))
+          (int32  . (2 . #t))
+          (int64  . (3 . #t))
+          (uint8  . (0 . #f))
+          (uint16 . (1 . #f))
+          (uint32 . (2 . #f))
+          (uint64 . (3 . #f))))
 
 (: type-name (-> (HashTable Word node-info) Type String))
 (define (type-name table ty)
@@ -80,7 +80,8 @@
     ((struct) (node-type-name table (hash-ref table (type-struct-type-id ty))))
     ((interface) (node-type-name table (hash-ref table (type-interface-type-id ty))))
     ((int8 int16 int32 int64) "Integer")
-    ((uint8 uint16 uint32 uint64) "Natural")
+    ((uint8) "Byte")
+    ((uint16 uint32 uint64) "Natural")
     ((float32) "Single-Flonum")
     ((float64) "Flonum")
     (else (symbol->string (type-case ty)))))
@@ -98,7 +99,7 @@
 (: generate-code (-> (ListReference Node) Output-Port Void))
 (define (generate-code nodes out)
   (write-string header out)
-  (let ((table : (HashTable Word node-info) (make-hash)))
+  (let ((table : (HashTable Word node-info) (make-hasheqv)))
     (for-nodes
      nodes
      (lambda (node)
