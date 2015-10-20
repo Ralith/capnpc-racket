@@ -36,6 +36,10 @@
 (define list-pointer-tag 1)
 (define far-pointer-tag 2)
 
+(: null-pointer? (-> Word Boolean))
+(define (null-pointer? x)
+  (= 0 x))
+
 (: raw-struct-pointer? (-> Word Boolean))
 (define (raw-struct-pointer? x)
   (= struct-pointer-tag (pointer-tag x)))
